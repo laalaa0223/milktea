@@ -1,1 +1,355 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>2026 手搖大作戰 ✨</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        
+        body { 
+            font-family: 'Noto Sans TC', sans-serif; 
+            background: linear-gradient(135deg, #FFF5F7 0%, #F0F7FF 100%); 
+            margin: 0; 
+            padding: 0; 
+            min-height: 100vh;
+        }
+
+        .loading-overlay { 
+            position: fixed; 
+            inset: 0; 
+            display: flex; 
+            flex-direction: column; 
+            align-items: center; 
+            justify-content: center; 
+            background: linear-gradient(135deg, #FFDEE9 0%, #B5FFFC 100%); 
+            z-index: 9999;
+        }
+
+        .heart-beat { animation: beat 1.5s ease-in-out infinite; }
+        @keyframes beat { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.15); } }
+
+        .glass-card {
+            background: rgba(255, 255, 255, 0.75);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+        }
+
+        .custom-scroll::-webkit-scrollbar { width: 4px; }
+        .custom-scroll::-webkit-scrollbar-thumb { background: #FFD1DC; border-radius: 10px; }
+        
+        input:focus { outline: none; }
+        .btn-option { transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // 確保環境變數存在
+        const firebaseConfig = JSON.parse(__firebase_config);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'drink-tracker-2026';
+
+        const { useState, useEffect, useMemo } = React;
+
+        const SUGAR_OPTIONS = ["無法調整", "全糖", "七分", "五分", "三分", "一分", "無糖"];
+        const ICE_OPTIONS = ["無法調整", "正常", "少冰", "微冰", "去冰", "完全去冰", "常溫", "熱"];
+
+        const HeartIcon = ({ className = "w-4 h-4", fill = "currentColor" }) => (
+            <svg className={className} viewBox="0 0 24 24" fill={fill}>
+                <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+            </svg>
+        );
+
+        const XIcon = () => (
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        );
+        const MinusIcon = () => (
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        );
+
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [records, setRecords] = useState({});
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [currentMonth, setCurrentMonth] = useState(new Date(2026, 0, 1));
+            const [isLoading, setIsLoading] = useState(true);
+
+            // 1. 初始化 Firebase Auth
+            useEffect(() => {
+                if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+                const auth = firebase.auth();
+                
+                const initAuth = async () => {
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await auth.signInWithCustomToken(__initial_auth_token);
+                    } else {
+                        await auth.signInAnonymously();
+                    }
+                };
+
+                initAuth();
+                const unsubscribe = auth.onAuthStateChanged((u) => {
+                    if (u) {
+                        setUser(u);
+                        // Auth 完成，但還沒拿到資料前先不解除 Loading
+                    }
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // 2. 監聽 Firestore 資料 (符合 Rule 1: /artifacts/{appId}/users/{userId}/{collectionName})
+            useEffect(() => {
+                if (!user) return;
+                const db = firebase.firestore();
+                // 使用規定路徑
+                const docRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('records').doc('main');
+                
+                const unsubscribe = docRef.onSnapshot((doc) => {
+                    if (doc.exists) {
+                        setRecords(doc.data().data || {});
+                    } else {
+                        setRecords({});
+                    }
+                    setIsLoading(false); // 拿到資料（無論有無紀錄）才關閉載入畫面
+                }, (error) => {
+                    console.error("Firestore Error:", error);
+                    setIsLoading(false);
+                });
+
+                return () => unsubscribe();
+            }, [user]);
+
+            // 3. 同步資料到雲端
+            const syncToCloud = async (newRecords) => {
+                if (!user) return;
+                try {
+                    const db = firebase.firestore();
+                    const docRef = db.collection('artifacts').doc(appId).collection('users').doc(user.uid).collection('records').doc('main');
+                    await docRef.set({ data: newRecords }, { merge: true });
+                } catch (err) {
+                    console.error("Sync Error:", err);
+                }
+            };
+
+            const analytics = useMemo(() => {
+                let mC = 0, yC = 0, mPrice = 0, yPrice = 0;
+                let shops = {}, items = {};
+                const targetM = currentMonth.getMonth() + 1;
+
+                Object.entries(records).forEach(([date, list]) => {
+                    const parts = date.split('-');
+                    const y = parseInt(parts[0]);
+                    const m = parseInt(parts[1]);
+                    if (y === 2026) {
+                        yC += list.length;
+                        if (m === targetM) mC += list.length;
+                        list.forEach(drink => {
+                            const price = parseInt(drink.price || 0);
+                            yPrice += price;
+                            if (m === targetM) mPrice += price;
+                            if (drink.shop) shops[drink.shop] = (shops[drink.shop] || 0) + 1;
+                            if (drink.item) items[drink.item] = (items[drink.item] || 0) + 1;
+                        });
+                    }
+                });
+                const favoriteShop = Object.entries(shops).sort((a,b) => b[1]-a[1])[0]?.[0] || "尚未紀錄";
+                const favoriteItem = Object.entries(items).sort((a,b) => b[1]-a[1])[0]?.[0] || "尚未紀錄";
+                return { mC, yC, mPrice, yPrice, favoriteShop, favoriteItem };
+            }, [records, currentMonth]);
+
+            const days = useMemo(() => ({
+                start: new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1).getDay(),
+                total: new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate()
+            }), [currentMonth]);
+
+            const updateDrink = (date, drinkId, updates) => {
+                const newList = (records[date] || []).map(i => i.id === drinkId ? {...i, ...updates} : i);
+                const updatedRecords = {...records, [date]: newList};
+                setRecords(updatedRecords);
+                syncToCloud(updatedRecords);
+            };
+
+            const deleteDrink = (date, drinkId) => {
+                const newList = records[date].filter(i => i.id !== drinkId);
+                const updatedRecords = {...records, [date]: newList};
+                setRecords(updatedRecords);
+                syncToCloud(updatedRecords);
+            };
+
+            const addDrink = (date) => {
+                const newList = [...(records[date] || []), { id: Date.now(), shop:'', item:'', sugar:'', ice:'', price:'' }];
+                const updatedRecords = {...records, [date]: newList};
+                setRecords(updatedRecords);
+                syncToCloud(updatedRecords);
+            };
+
+            if (isLoading) {
+                return (
+                    <div className="loading-overlay">
+                        <svg className="heart-beat w-16 h-16 text-white mb-4" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
+                        </svg>
+                        <div className="text-white font-black text-xl tracking-widest animate-pulse text-center px-4">
+                            還敢喝啊！要喝幾杯？
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="max-w-md mx-auto p-4 min-h-screen pb-10">
+                    <header className="bg-gradient-to-r from-[#FFD1DC] to-[#B5FFFC] rounded-[2.5rem] p-8 mb-6 text-white text-center shadow-lg relative overflow-hidden">
+                        <div className="absolute top-[-10px] left-[-10px] opacity-20"><HeartIcon className="w-20 h-20" fill="white"/></div>
+                        <h1 className="text-3xl font-black tracking-wider drop-shadow-md">2026 手搖大作戰</h1>
+                        <p className="text-[10px] font-bold uppercase mt-2 tracking-[0.2em] opacity-90 italic">Sweetness Tracking System</p>
+                    </header>
+
+                    <div className="grid grid-cols-2 gap-4 mb-4">
+                        <div className="glass-card p-5 rounded-[2.2rem] shadow-sm border-pink-100 flex flex-col items-center text-center">
+                            <div className="flex items-center gap-1 mb-1">
+                                <HeartIcon className="w-3 h-3 text-pink-300" fill="currentColor" />
+                                <span className="text-[10px] font-bold text-gray-400 uppercase">本月統計</span>
+                            </div>
+                            <div className="text-2xl font-black text-pink-500 leading-tight">{analytics.mC} <span className="text-[10px]">杯</span></div>
+                            <div className="text-sm font-bold text-gray-400 mt-1">$ {analytics.mPrice}</div>
+                        </div>
+                        <div className="glass-card p-5 rounded-[2.2rem] shadow-sm border-blue-100 flex flex-col items-center text-center">
+                            <div className="flex items-center gap-1 mb-1">
+                                <HeartIcon className="w-3 h-3 text-blue-300" fill="currentColor" />
+                                <span className="text-[10px] font-bold text-gray-400 uppercase">年度累計</span>
+                            </div>
+                            <div className="text-2xl font-black text-blue-400 leading-tight">{analytics.yC} <span className="text-[10px]">杯</span></div>
+                            <div className="text-sm font-bold text-gray-400 mt-1">$ {analytics.yPrice}</div>
+                        </div>
+                    </div>
+
+                    <div className="glass-card p-5 rounded-[2.2rem] shadow-sm mb-6 flex justify-between items-center border-white/50">
+                        <div className="flex-1 text-center border-r border-gray-100">
+                            <div className="text-[10px] font-bold text-gray-400 mb-1">最常去店家</div>
+                            <div className="text-sm font-black text-gray-600 truncate px-2">{analytics.favoriteShop}</div>
+                        </div>
+                        <div className="flex-1 text-center">
+                            <div className="text-[10px] font-bold text-gray-400 mb-1">最愛喝品項</div>
+                            <div className="text-sm font-black text-gray-600 truncate px-2">{analytics.favoriteItem}</div>
+                        </div>
+                    </div>
+
+                    <div className="glass-card rounded-[3rem] p-8 shadow-sm">
+                        <div className="flex justify-between items-center mb-8 px-2 font-black text-gray-600">
+                            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))} className="text-pink-200 p-2"><HeartIcon className="w-6 h-6" fill="currentColor" /></button>
+                            <span className="text-xl tracking-tight">{currentMonth.getFullYear()} / {currentMonth.getMonth()+1}</span>
+                            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1))} className="text-blue-200 p-2"><HeartIcon className="w-6 h-6" fill="currentColor" /></button>
+                        </div>
+
+                        <div className="grid grid-cols-7 gap-3">
+                            {['日','一','二','三','四','五','六'].map(d => <div key={d} className="text-center text-[10px] font-bold text-gray-300">{d}</div>)}
+                            {Array.from({ length: days.start }).map((_, i) => <div key={`e-${i}`} />)}
+                            {Array.from({ length: days.total }).map((_, i) => {
+                                const d = i + 1;
+                                const key = `2026-${currentMonth.getMonth()+1}-${d}`;
+                                const count = (records[key] || []).length;
+                                return (
+                                    <div key={d} onClick={() => { setSelectedDate(key); setIsModalOpen(true); }} 
+                                         className={`h-11 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all active:scale-90 ${count > 0 ? 'bg-gradient-to-br from-pink-200 to-blue-200 text-white shadow-sm' : 'text-gray-400 hover:bg-white'}`}>
+                                        <span className="text-xs font-black">{d}</span>
+                                        {count > 0 && <HeartIcon className="w-2 h-2 text-white mt-0.5 heart-beat" fill="white" />}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    {isModalOpen && (
+                        <div className="fixed inset-0 z-50 bg-blue-900/10 backdrop-blur-md flex items-end justify-center">
+                            <div className="bg-white w-full max-w-md rounded-t-[3.5rem] p-8 shadow-2xl border-t-4 border-pink-100 flex flex-col max-h-[90vh]">
+                                <div className="flex justify-between items-center mb-6 flex-shrink-0">
+                                    <div>
+                                        <h2 className="text-2xl font-black text-gray-700">{selectedDate}</h2>
+                                        <div className="text-[10px] text-pink-300 font-bold flex items-center gap-1 uppercase tracking-widest"><HeartIcon className="w-3 h-3" fill="currentColor"/> Daily sweetness memo</div>
+                                    </div>
+                                    <button onClick={() => setIsModalOpen(false)} className="bg-gray-50 p-2 rounded-full text-gray-300"><XIcon /></button>
+                                </div>
+                                
+                                <div className="space-y-6 overflow-y-auto pr-2 custom-scroll flex-1 pb-6">
+                                    {(records[selectedDate] || []).map(drink => (
+                                        <div key={drink.id} className="p-5 bg-gradient-to-r from-pink-50/30 to-blue-50/30 rounded-[2.5rem] relative border border-white shadow-sm space-y-4">
+                                            <button onClick={() => deleteDrink(selectedDate, drink.id)} className="absolute -top-1 -right-1 bg-white shadow-md p-1.5 rounded-full text-rose-200 z-10">
+                                                <MinusIcon />
+                                            </button>
+                                            
+                                            <div className="grid grid-cols-2 gap-3">
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black text-pink-300 ml-2 uppercase">Shop</label>
+                                                    <input placeholder="店家" value={drink.shop} onChange={e => updateDrink(selectedDate, drink.id, {shop: e.target.value})} className="w-full bg-white/80 p-3 rounded-2xl text-xs font-bold border-none ring-pink-200" />
+                                                </div>
+                                                <div className="space-y-1">
+                                                    <label className="text-[10px] font-black text-blue-300 ml-2 uppercase">Item</label>
+                                                    <input placeholder="品項" value={drink.item} onChange={e => updateDrink(selectedDate, drink.id, {item: e.target.value})} className="w-full bg-white/80 p-3 rounded-2xl text-xs font-bold border-none ring-blue-200" />
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-gray-400 uppercase ml-2">Sugar Level</label>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {SUGAR_OPTIONS.map(opt => (
+                                                        <button key={opt} onClick={() => updateDrink(selectedDate, drink.id, {sugar: opt})} 
+                                                            className={`px-3 py-1.5 rounded-full text-[10px] font-bold btn-option ${drink.sugar === opt ? 'bg-pink-400 text-white shadow-sm' : 'bg-white text-gray-400 border border-pink-50'}`}>
+                                                            {opt}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-gray-400 uppercase ml-2">Ice Level</label>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {ICE_OPTIONS.map(opt => (
+                                                        <button key={opt} onClick={() => updateDrink(selectedDate, drink.id, {ice: opt})} 
+                                                            className={`px-3 py-1.5 rounded-full text-[10px] font-bold btn-option ${drink.ice === opt ? 'bg-blue-400 text-white shadow-sm' : 'bg-white text-gray-400 border border-blue-50'}`}>
+                                                            {opt}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-1">
+                                                <label className="text-[10px] font-black text-gray-400 ml-2 uppercase">Price</label>
+                                                <div className="flex items-center bg-white/80 rounded-2xl px-3">
+                                                    <span className="text-xs font-bold text-gray-300 mr-2">$</span>
+                                                    <input type="number" placeholder="金額" value={drink.price || ''} onChange={e => updateDrink(selectedDate, drink.id, {price: e.target.value})} className="w-full bg-transparent p-3 text-xs font-bold border-none" />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    <button onClick={() => addDrink(selectedDate)} className="w-full py-4 border-2 border-dashed border-pink-100 rounded-[2rem] text-pink-200 font-black text-xs hover:bg-pink-50 flex items-center justify-center gap-2">
+                                        <HeartIcon className="w-3 h-3" fill="currentColor"/> 新增這杯紀錄
+                                    </button>
+                                </div>
+                                <div className="flex-shrink-0 pt-4">
+                                    <button onClick={() => setIsModalOpen(false)} className="w-full bg-gradient-to-r from-[#FFD1DC] to-[#B5FFFC] text-white font-black py-5 rounded-[2.5rem] shadow-lg flex items-center justify-center gap-2 text-sm tracking-widest">
+                                        <HeartIcon className="w-4 h-4" fill="white" /> 儲存紀錄 ✨
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
