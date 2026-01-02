@@ -11,7 +11,194 @@
 </head>
 <body>
     <div id="root"></div>
-    <!-- 這裡放您原本的 DrinkTracker2026.jsx 內容 -->
+   <!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>2026 手搖大作戰 ✨</title>
+    <!-- 載入核心套件 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide-react"></script>
+    
+    <!-- 載入 Firebase SDK (CDN 版本) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, collection } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // 將 Firebase 功能掛載到全域，方便 React 使用
+        window.FB = { initializeApp, getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken, getFirestore, doc, setDoc, onSnapshot, collection };
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700;900&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; -webkit-tap-highlight-color: transparent; }
+        .heart-beat { animation: heartBeat 1.5s ease-in-out infinite; }
+        @keyframes heartBeat {
+            0% { transform: scale(1); }
+            14% { transform: scale(1.1); }
+            28% { transform: scale(1); }
+            42% { transform: scale(1.1); }
+            70% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body class="bg-[#FFF9FB] text-slate-600">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+        const { Heart, ChevronLeft, ChevronRight, X, Trash2, Store, CupSoda, Loader2 } = lucide;
+
+        // --- 🔴 Firebase 配置區 🔴 ---
+        // 請將下方 empty string 替換為你在 Firebase 控制台得到的正確資訊
+        const firebaseConfig = {
+            apiKey: "",
+            authDomain: "",
+            projectId: "",
+            storageBucket: "",
+            messagingSenderId: "",
+            appId: ""
+        };
+
+        const App = () => {
+            const [db, setDb] = useState(null);
+            const [user, setUser] = useState(null);
+            const [records, setRecords] = useState({});
+            const [isModalOpen, setIsModalOpen] = useState(false);
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [currentMonth, setCurrentMonth] = useState(new Date(2026, 0, 1));
+            const [syncing, setSyncing] = useState(false);
+
+            const appId = typeof __app_id !== 'undefined' ? __app_id : 'my-drink-tracker-2026';
+            const iceOptions = ["正常冰", "少冰", "微冰", "去冰", "常溫", "溫熱", "無法調整"];
+            const sugarOptions = ["全糖", "七分", "半糖", "三分", "一分", "無糖", "無法調整"];
+
+            // 1. 初始化 Firebase 與 匿名登入
+            useEffect(() => {
+                const init = async () => {
+                    const { initializeApp, getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, getFirestore } = window.FB;
+                    const config = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : firebaseConfig;
+                    const app = initializeApp(config);
+                    const auth = getAuth(app);
+                    const firestore = getFirestore(app);
+                    setDb(firestore);
+
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await signInAnonymously(auth);
+                    }
+                    onAuthStateChanged(auth, (u) => setUser(u));
+                };
+                init();
+            }, []);
+
+            // 2. 監聽 Firestore 數據 (即時更新)
+            useEffect(() => {
+                if (!user || !db) return;
+                const { doc, onSnapshot } = window.FB;
+                // 根據路徑規範：/artifacts/{appId}/users/{userId}/data/main
+                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'main');
+                
+                const unsubscribe = onSnapshot(docRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        setRecords(docSnap.data().records || {});
+                    }
+                }, (error) => console.error("Firestore Listen Error:", error));
+                
+                return () => unsubscribe();
+            }, [user, db]);
+
+            // 3. 同步數據到雲端
+            const syncData = async (newRecords) => {
+                setRecords(newRecords);
+                if (!user || !db) return;
+                const { doc, setDoc } = window.FB;
+                try {
+                    setSyncing(true);
+                    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'main');
+                    await setDoc(docRef, { records: newRecords }, { merge: true });
+                    setTimeout(() => setSyncing(false), 800);
+                } catch (e) { 
+                    console.error(e);
+                    setSyncing(false);
+                }
+            };
+
+            // 4. 數據分析邏輯
+            const analytics = useMemo(() => {
+                const shopMap = {};
+                const itemMap = {};
+                let mC = 0, yC = 0;
+                const targetM = currentMonth.getMonth() + 1;
+
+                Object.entries(records).forEach(([date, list]) => {
+                    const [y, m] = date.split('-').map(Number);
+                    if (y === 2026) {
+                        yC += list.length;
+                        if (m === targetM) mC += list.length;
+                        list.forEach(i => {
+                            if (i.shop) shopMap[i.shop] = (shopMap[i.shop] || 0) + 1;
+                            if (i.item) itemMap[i.item] = (itemMap[i.item] || 0) + 1;
+                        });
+                    }
+                });
+
+                const getTop = (map) => {
+                    const res = Object.entries(map).sort((a,b) => b[1]-a[1])[0];
+                    return res ? res[0] : "尚無紀錄";
+                };
+
+                return { mC, yC, topShop: getTop(shopMap), topItem: getTop(itemMap) };
+            }, [records, currentMonth]);
+
+            const { firstDay, totalDays } = useMemo(() => {
+                const y = currentMonth.getFullYear(), m = currentMonth.getMonth();
+                return { firstDay: new Date(y, m, 1).getDay(), totalDays: new Date(y, m + 1, 0).getDate() };
+            }, [currentMonth]);
+
+            return (
+                <div className="max-w-md mx-auto p-4 pb-12">
+                    {/* Header */}
+                    <header className="relative bg-gradient-to-br from-[#FFD1D1] to-[#D1E1FF] rounded-[2.5rem] shadow-lg p-6 mb-4 text-center text-white border-4 border-white">
+                        <h1 className="text-2xl font-black italic tracking-tighter">2026 手搖大作戰</h1>
+                        <p className="text-[10px] font-bold tracking-[0.2em] opacity-80 mt-1 uppercase italic">Personal Drink Diary</p>
+                        {syncing && (
+                            <div className="absolute top-3 right-5 flex items-center gap-1 bg-white/20 px-2 py-0.5 rounded-full">
+                                <Loader2 size={10} className="animate-spin" />
+                                <span className="text-[8px] font-bold">SAVING</span>
+                            </div>
+                        )}
+                    </header>
+
+                    {/* 置頂分析數據 */}
+                    <section className="grid grid-cols-2 gap-3 mb-4">
+                        <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-orange-50 flex flex-col items-center text-center">
+                            <div className="bg-orange-100 p-2 rounded-full mb-2"><Store size={16} className="text-orange-400" /></div>
+                            <h4 className="text-[9px] font-black text-orange-300 uppercase mb-1">最愛店家</h4>
+                            <p className="text-xs font-black text-slate-700 truncate w-full px-2">{analytics.topShop}</p>
+                        </div>
+                        <div className="bg-white p-4 rounded-[2rem] shadow-sm border border-purple-50 flex flex-col items-center text-center">
+                            <div className="bg-purple-100 p-2 rounded-full mb-2"><CupSoda size={16} className="text-purple-400" /></div>
+                            <h4 className="text-[9px] font-black text-purple-300 uppercase mb-1">最愛品項</h4>
+                            <p className="text-xs font-black text-slate-700 truncate w-full px-2">{analytics.topItem}</p>
+                        </div>
+                    </section>
+
+                    {/* 月/年 計數 */}
+                    <section className="grid grid-cols-2 gap-3 mb-6">
+                        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-pink-50">
+                            <h4 className="text-[9px] font-black text-pink-300 uppercase mb-1">{currentMonth.getMonth()+1}月杯數</h4>
+                            <div className="flex items-end gap-1"><span className="text-2xl font-black text-slate-700">{analytics.mC}</span><span className="text-[10px] text-slate-300 mb-1 font-bold">杯</span></div>
+                        </div>
+                        <div className="bg-white p-5 rounded-[2rem] shadow-sm border border-blue-50">
+                            <h4 className="text-[9px] font-black text-blue-300 uppercase mb-1">2026 總計</h4>
+                            <div className="flex items-end gap-1"><span className="text-2xl font-black text-slate-700">{ana
     <script type="text/babel">
         // [將 DrinkTracker2026.jsx 的所有程式碼貼在下面]
         // 注意：最後要加上這行來啟動應用程式
